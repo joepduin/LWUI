@@ -159,7 +159,7 @@ We welcome all contributions!
 * 🔧 Submit **Pull Requests**
 * 📩 Contact: [info@joepduin.dev](mailto:info@joepduin.dev)
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for contribution guidelines.
+See [DEVELOPMENT.md](DEVELOPMENT) for contribution guidelines.
 
 ---
 

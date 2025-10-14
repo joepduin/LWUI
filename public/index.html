@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local Website UI</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="canvas" aria-hidden="true">
+    <div class="canvas-shape shape-one"></div>
+    <div class="canvas-shape shape-two"></div>
+  </div>
+
+  <section id="loginBox" class="auth-screen">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="auth-mark">LW</div>
+        <div class="auth-headings">
+          <h1>Local Website UI</h1>
+          <p>Sign in to manage local sites, tunnels, and users.</p>
+        </div>
+      </div>
+      <form id="loginForm" class="auth-form" onsubmit="event.preventDefault(); submitLogin();">
+        <label for="username">Username</label>
+        <input type="text" id="username" placeholder="Enter your username" autocomplete="username" />
+
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Enter your password" autocomplete="current-password" />
+
+        <div id="twoFactorStep" class="two-factor-inline" style="display:none;">
+          <label for="twoFactorCode">Verification code</label>
+          <input type="text" id="twoFactorCode" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
+        </div>
+
+        <div class="auth-actions">
+          <button type="submit" class="btn primary" id="loginSubmitBtn">Sign in</button>
+          <button type="button" class="btn ghost" id="loginBackBtn" onclick="resetLoginStep()" style="display:none;">Back</button>
+        </div>
+
+        <button type="button" class="link-btn" onclick="toggleResetView(true)">Forgot password?</button>
+      </form>
+
+      <form id="resetFlow" class="auth-form" style="display:none;" onsubmit="event.preventDefault();">
+        <div id="resetRequestStep">
+          <label for="resetIdentifier">Username or email</label>
+          <input type="text" id="resetIdentifier" placeholder="Enter your username or email" autocomplete="username email" />
+          <div class="auth-actions">
+            <button type="button" class="btn primary" onclick="requestPasswordReset()">Send reset email</button>
+            <button type="button" class="btn ghost" onclick="toggleResetView(false)">Back to sign in</button>
+          </div>
+        </div>
+        <div id="resetCompleteStep" style="display:none;">
+          <p class="form-hint">We sent you a reset code. Enter it below to choose a new password.</p>
+          <label for="resetCode">Reset code</label>
+          <input type="text" id="resetCode" placeholder="Paste the code from your email" autocomplete="one-time-code" />
+          <label for="resetNewPassword">New password</label>
+          <input type="password" id="resetNewPassword" placeholder="Choose a new password" autocomplete="new-password" />
+          <label for="resetConfirmPassword">Confirm password</label>
+          <input type="password" id="resetConfirmPassword" placeholder="Repeat the password" autocomplete="new-password" />
+          <div class="auth-actions">
+            <button type="button" class="btn primary" onclick="completePasswordReset()">Reset password</button>
+            <button type="button" class="btn ghost" onclick="toggleResetCompletion(false)">Back</button>
+          </div>
+        </div>
+      </form>
+
+      <p id="loginMessage" class="auth-message"></p>
+    </div>
+  </section>
+
+  <div id="adminApp" class="app-shell" style="display:none;">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-mark">LW</div>
+        <div class="brand-copy">
+          <span class="brand-title">Local Website UI</span>
+          <span class="brand-subtitle">Control Center</span>
+        </div>
+      </div>
+      <nav class="topbar-nav">
+        <button class="nav-link" data-page="dashboard" data-page-label="Dashboard" data-page-subtitle="Overview of system health" onclick="showPage('dashboard')">Dashboard</button>
+  <button class="nav-link" data-page="createSite" data-page-label="Create Site" data-page-subtitle="Provision a new local site" data-permission="canManageSites" onclick="showPage('createSite')">Create Site</button>
+        <button class="nav-link" data-page="manageSites" data-page-label="Manage Sites" data-page-subtitle="Review and update existing sites" onclick="showPage('manageSites')">Manage Sites</button>
+        <button class="nav-link" data-page="siteFiles" data-page-label="Site Files" data-page-subtitle="Inspect and edit site files" onclick="showPage('siteFiles')">Site Files</button>
+  <button class="nav-link" data-page="tunnel" data-page-label="Cloudflare Tunnel" data-page-subtitle="Monitor and configure the tunnel" data-permission="canManageTunnel" onclick="showPage('tunnel')">Cloudflare Tunnel</button>
+  <button class="nav-link admin-only" data-page="users" data-page-label="User Management" data-page-subtitle="Create and manage accounts" data-permission="canManageUsers" onclick="showPage('users')" style="display:none;">Users</button>
+        <button class="nav-link" data-page="settings" data-page-label="Settings" data-page-subtitle="Account preferences and security" onclick="showPage('settings')">Settings</button>
+      </nav>
+      <div class="topbar-actions">
+        <button class="nav-link logout" onclick="logout()">Log out</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <header class="workspace-header">
+        <div class="workspace-titles">
+          <h1 id="workspaceTitle">Dashboard</h1>
+          <p id="workspaceSubtitle">Overview of system health</p>
+        </div>
+        <div class="account-chip">
+          <div class="account-name" id="headerUserName">-</div>
+          <div class="account-role" id="headerUserRole">-</div>
+        </div>
+      </header>
+
+      <main class="workspace-main">
+        <section id="dashboard" class="page">
+          <div class="section-header">
+            <div>
+              <h2>System status</h2>
+              <p>Live metrics sourced from the server.</p>
+            </div>
+          </div>
+          <div class="stat-grid">
+            <article class="stat-card">
+              <span class="stat-label">RAM usage</span>
+              <span class="stat-value" id="ramUsage">Loading...</span>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Errors</span>
+              <span class="stat-value" id="errorStatus">None</span>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Tunnel status</span>
+              <span class="stat-value" id="tunnelStatus">Unknown</span>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Active sites</span>
+              <span class="stat-value" id="siteCount">0</span>
+            </article>
+          </div>
+
+          <div class="section-header">
+            <div>
+              <h2>Quick actions</h2>
+              <p>Jump straight to frequent tasks.</p>
+            </div>
+          </div>
+          <div class="action-grid">
+            <button class="action-card" onclick="showPage('createSite')">
+              <span class="action-title">Create a site</span>
+              <span class="action-copy">Provision a new project in seconds.</span>
+            </button>
+            <button class="action-card" onclick="showPage('manageSites')">
+              <span class="action-title">Manage sites</span>
+              <span class="action-copy">Review, open, or delete existing sites.</span>
+            </button>
+            <button class="action-card" onclick="showPage('tunnel')">
+              <span class="action-title">Cloudflare tunnel</span>
+              <span class="action-copy">Connect environments securely over the tunnel.</span>
+            </button>
+          </div>
+        </section>
+
+        <section id="createSite" class="page" style="display:none;">
+          <div class="section-header">
+            <div>
+              <h2>Create new site</h2>
+              <p>Name the site and optionally assign a port.</p>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="form-grid">
+              <label for="siteNameInput">Site name</label>
+              <input type="text" id="siteNameInput" placeholder="example.local" />
+
+              <label for="sitePortInput">Port (optional)</label>
+              <input type="number" id="sitePortInput" placeholder="8080" min="1024" max="65535" />
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" onclick="createSite()">Create site</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="manageSites" class="page" style="display:none;">
+          <div class="section-header">
+            <div>
+              <h2>Site inventory</h2>
+              <p>Launch, configure, or retire existing sites.</p>
+            </div>
+          </div>
+          <div id="siteList" class="site-list">Loading...</div>
+        </section>
+
+        <section id="siteFiles" class="page" style="display:none;">
+          <div class="section-header">
+            <div>
+              <h2>Files for <span id="currentSiteName"></span></h2>
+              <p>Browse directories and edit files directly in the browser.</p>
+            </div>
+            <div class="section-actions">
+              <button class="btn ghost" onclick="showPage('manageSites')">Back to sites</button>
+            </div>
+          </div>
+
+          <div class="file-workspace">
+            <div class="panel file-browser-panel">
+              <div class="file-path-bar">
+                <span class="file-path-label">Current path</span>
+                <span class="file-path-value" id="currentPath">/</span>
+              </div>
+              <div class="file-toolbar">
+                <button class="btn secondary" id="newFileButton" onclick="createNewFile()">New file</button>
+                <button class="btn secondary" id="newFolderButton" onclick="createNewFolder()">New folder</button>
+              </div>
+              <div id="fileList" class="file-list">Loading...</div>
+            </div>
+
+            <div id="fileEditorContainer" class="panel editor-panel" style="display:none;">
+              <div class="editor-header">
+                <div>
+                  <span class="editor-label">Editing</span>
+                  <span class="editor-name" id="editingFileName"></span>
+                </div>
+                <div class="editor-actions">
+                  <button class="btn primary" id="saveFileButton" onclick="saveFile()">Save</button>
+                  <button class="btn ghost" onclick="closeEditor()">Close</button>
+                </div>
+              </div>
+              <textarea id="fileEditor" spellcheck="false"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section id="tunnel" class="page" style="display:none;">
+          <div class="section-header">
+            <div>
+              <h2>Cloudflare tunnel</h2>
+              <p>Control tunnel sessions and configuration.</p>
+            </div>
+            <div class="section-actions">
+              <button class="btn secondary" onclick="loadTunnelConfig()">Reload data</button>
+            </div>
+          </div>
+
+          <div class="status-strip">
+            <span class="status-pill" id="tunnelStatusChip">Status: Unknown</span>
+            <span class="status-pill muted" id="tunnelModeChip">Mode: Not configured</span>
+            <span class="status-pill alert" id="tunnelErrorChip" style="display:none;"></span>
+          </div>
+
+          <div class="panel control-panel">
+            <div class="control-actions">
+              <button class="btn primary" onclick="startTunnel()">Start tunnel</button>
+              <button class="btn ghost" onclick="stopTunnel()">Stop tunnel</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Token mode</h3>
+            <p class="panel-copy">Paste the token from Cloudflare to let the platform manage sessions.</p>
+            <textarea id="tunnelTokenInput" placeholder="Cloudflare tunnel token"></textarea>
+            <div class="token-actions">
+              <button class="btn primary" onclick="saveTunnelToken()">Save token</button>
+              <button class="btn ghost" id="clearTunnelTokenBtn" onclick="clearTunnelToken()" style="display:none;">Remove token</button>
+            </div>
+            <p id="tunnelTokenStatus" class="token-status">No token configured.</p>
+          </div>
+
+          <div class="panel">
+            <h3>Configuration file mode</h3>
+            <div class="form-grid">
+              <label for="tunnelId">Tunnel ID</label>
+              <input type="text" id="tunnelId" placeholder="tunnel identifier" />
+
+              <label for="credentialsFile">Credentials file</label>
+              <input type="text" id="credentialsFile" placeholder="/root/.cloudflared/xxx.json" />
+            </div>
+
+            <h4>Ingress rules</h4>
+            <div id="ingressList" class="ingress-list"></div>
+            <div class="form-actions">
+              <button class="btn secondary" onclick="addIngressRule()">Add rule</button>
+              <button class="btn primary" onclick="saveTunnelConfig()">Save configuration</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="users" class="page admin-only" style="display:none;">
+          <div class="section-header">
+            <div>
+              <h2>User management</h2>
+              <p>Create accounts and reset credentials.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Create user</h3>
+            <div class="form-grid two-column">
+              <label for="newUsername">Username</label>
+              <input type="text" id="newUsername" placeholder="Username" />
+
+              <label for="newPassword">Password</label>
+              <input type="password" id="newPassword" placeholder="Password" />
+
+              <label for="newUserRole">Role</label>
+              <select id="newUserRole">
+                <option value="user">User</option>
+                <option value="admin">Admin</option>
+              </select>
+
+              <label for="newUserEmail">Email</label>
+              <input type="email" id="newUserEmail" placeholder="user@example.com" />
+            </div>
+
+            <div class="permissions-block">
+              <h4>Permissions</h4>
+              <div class="toggle-group">
+                <label class="checkbox">
+                  <input type="checkbox" id="newUserManageSites" checked />
+                  <span>Manage assigned sites</span>
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" id="newUserManageTunnel" />
+                  <span>Manage tunnel</span>
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" id="newUserManageMail" />
+                  <span>Manage mail settings</span>
+                </label>
+              </div>
+
+              <div class="site-access-control">
+                <span class="field-label">Site access</span>
+                <div class="radio-group" id="newUserSiteAccess">
+                  <label class="radio">
+                    <input type="radio" name="newUserSiteAccess" value="all" checked />
+                    <span>All sites</span>
+                  </label>
+                  <label class="radio">
+                    <input type="radio" name="newUserSiteAccess" value="limited" />
+                    <span>Selected sites</span>
+                  </label>
+                </div>
+                <div id="newUserSiteSelection" class="site-selection" style="display:none;"></div>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" onclick="createUser()">Create user</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Existing users</h3>
+            <div id="userList" class="user-list">Loading...</div>
+          </div>
+
+          <div class="panel" id="userPermissionsPanel" style="display:none;">
+            <h3 id="permissionsPanelTitle">Edit permissions</h3>
+            <p class="panel-copy" id="permissionsPanelSubtitle"></p>
+            <input type="hidden" id="permissionsUserId" />
+
+            <div class="toggle-group">
+              <label class="checkbox">
+                <input type="checkbox" id="editManageSites" />
+                <span>Manage assigned sites</span>
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="editManageTunnel" />
+                <span>Manage tunnel</span>
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" id="editManageMail" />
+                <span>Manage mail settings</span>
+              </label>
+            </div>
+
+            <div class="site-access-control">
+              <span class="field-label">Site access</span>
+              <div class="radio-group" id="editSiteAccessGroup">
+                <label class="radio">
+                  <input type="radio" name="editSiteAccess" value="all" />
+                  <span>All sites</span>
+                </label>
+                <label class="radio">
+                  <input type="radio" name="editSiteAccess" value="limited" />
+                  <span>Selected sites</span>
+                </label>
+              </div>
+              <div id="editSiteSelection" class="site-selection" style="display:none;"></div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn primary" onclick="saveUserPermissions()">Save changes</button>
+              <button class="btn ghost" onclick="hidePermissionsPanel()">Cancel</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="settings" class="page" style="display:none;">
+          <div class="section-header">
+            <div>
+              <h2>Account settings</h2>
+              <p>Keep your profile information up to date.</p>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Profile</h3>
+            <dl class="profile-grid">
+              <div class="profile-row">
+                <dt>Username</dt>
+                <dd id="currentUsername">-</dd>
+              </div>
+              <div class="profile-row">
+                <dt>Role</dt>
+                <dd id="currentUserRole">-</dd>
+              </div>
+              <div class="profile-row">
+                <dt>Email</dt>
+                <dd id="currentUserEmail">-</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="panel">
+            <h3>Update email</h3>
+            <div class="form-grid">
+              <label for="newEmail">Email address</label>
+              <input type="email" id="newEmail" placeholder="you@example.com" />
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" onclick="changeOwnEmail()">Update email</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Change password</h3>
+            <div class="form-grid">
+              <label for="newOwnPassword">New password</label>
+              <input type="password" id="newOwnPassword" placeholder="New password" />
+
+              <label for="confirmOwnPassword">Confirm new password</label>
+              <input type="password" id="confirmOwnPassword" placeholder="Repeat password" />
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" onclick="changeOwnPassword()">Update password</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Two-factor authentication</h3>
+            <p class="panel-copy">Add a secondary verification step for your account.</p>
+            <div class="two-factor-status">
+              <span>Status:</span>
+              <span id="twoFactorStatus">Loading...</span>
+            </div>
+            <div id="twoFactorDisabled" class="two-factor-block" style="display:none;">
+              <button class="btn primary" onclick="setup2FA()">Enable 2FA</button>
+            </div>
+            <div id="twoFactorSetup" class="two-factor-block" style="display:none;">
+              <p>Scan the QR code with your authenticator app or enter the secret manually.</p>
+              <div class="qr-wrapper">
+                <img id="qrCodeImage" alt="QR code" />
+              </div>
+              <code id="twoFactorSecret" class="two-factor-secret"></code>
+              <label for="verifyToken">Verification code</label>
+              <input type="text" id="verifyToken" placeholder="Enter 6 digits" maxlength="6" />
+              <div class="form-actions">
+                <button class="btn primary" onclick="verify2FA()">Verify and enable</button>
+                <button class="btn ghost" onclick="cancel2FASetup()">Cancel</button>
+              </div>
+            </div>
+            <div id="twoFactorEnabled" class="two-factor-block" style="display:none;">
+              <p>Two-factor authentication is active on this account.</p>
+              <label for="disable2FAToken">Verification code</label>
+              <input type="text" id="disable2FAToken" placeholder="Enter 6 digits" maxlength="6" />
+              <div class="form-actions">
+                <button class="btn danger" onclick="disable2FA()">Disable 2FA</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel admin-only" id="mailConfigPanel" style="display:none;">
+            <h3>Mail server</h3>
+            <p class="panel-copy">Configure SMTP to enable outbound notifications.</p>
+            <div class="mail-grid">
+              <label class="checkbox">
+                <input type="checkbox" id="mailEnabled" />
+                <span>Enable mail server</span>
+              </label>
+
+              <label for="mailHost">SMTP host</label>
+              <input type="text" id="mailHost" placeholder="smtp.example.com" />
+
+              <label for="mailPort">SMTP port</label>
+              <input type="number" id="mailPort" placeholder="587" />
+
+              <label class="checkbox">
+                <input type="checkbox" id="mailSecure" />
+                <span>Use SSL/TLS</span>
+              </label>
+
+              <label for="mailUser">Username</label>
+              <input type="text" id="mailUser" placeholder="user@example.com" />
+
+              <label for="mailPassword">Password</label>
+              <input type="password" id="mailPassword" placeholder="App specific password" />
+
+              <label for="mailFrom">From address</label>
+              <input type="text" id="mailFrom" placeholder="noreply@example.com" />
+
+              <label for="mailAppUrl">Portal URL</label>
+              <input type="text" id="mailAppUrl" placeholder="https://dashboard.example.com" />
+            </div>
+            <div class="toggle-group">
+              <label class="checkbox">
+                <input type="checkbox" id="mailAlertDowntime" checked />
+                <span>Send emails when the tunnel goes offline</span>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="btn primary" onclick="saveMailConfig()">Save configuration</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="index.js"></script>
+</body>
+</html>

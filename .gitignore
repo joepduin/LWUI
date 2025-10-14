@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+backend/sites.json
+backend/users.json
+backend/sessions.json
+backend/mailConfig.json
+package-lock.json
+sites/
+smb/
+nginx-configs/
+nginx-enabled/
+cloudflared/token.json

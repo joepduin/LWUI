@@ -50,7 +50,7 @@ It provides an **admin panel** to easily create sites, manage Cloudflare setting
 1. **Clone the repo**
    ```bash
    git clone https://github.com/joepduin/LWUI-beta.git
-   cd LWUI-beta
+   cd lwui
 
 2. **Run the installer**
 

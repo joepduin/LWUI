@@ -25,6 +25,8 @@ It provides an **admin panel** to easily create sites, manage Cloudflare setting
 - 👥 **Role-based user management**
 - 🔐 **2FA (TOTP)** and **password reset**
 - 📧 **Email notifications** for critical events
+- 🛡️ **Hardened API layer** with Helmet, compression, smart rate limiting, and sandboxed file writes
+- 🔔 **Responsive toast UX** and global loading states so every action feels instant and transparent
 
 ---
 
@@ -146,6 +148,7 @@ Go to **Settings → Mail Server Configuration** and set:
 * Use **app passwords** for SMTP
 * Keep your system updated
 * Monitor logs regularly
+* LWUI now ships with **Helmet**, strict JSON limits, per-route rate limiting, and safer file sandboxing—keep these protections enabled
 
 Supports **Cloudflare Zero Trust** for enhanced protection.
 

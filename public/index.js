@@ -20,6 +20,102 @@ const PAGE_METADATA = {
   settings: { label: 'Settings', subtitle: 'Account preferences and security' }
 };
 
+const uiFeedback = (() => {
+  const stackId = 'toastStack';
+  const overlayId = 'globalLoading';
+  const overlayLabelId = 'globalLoadingLabel';
+  const pendingToasts = [];
+
+  function spawnToast(stack, message, variant, duration) {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${variant}`;
+    toast.setAttribute('role', 'status');
+    toast.textContent = message;
+    stack.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('is-visible'));
+    const remove = () => {
+      toast.classList.remove('is-visible');
+      toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    };
+    toast.addEventListener('click', remove, { once: true });
+    setTimeout(remove, duration);
+  }
+
+  function showToast(message, variant = 'info', { duration = 4500 } = {}) {
+    if (!message) {
+      return;
+    }
+    const stack = document.getElementById(stackId);
+    if (!stack) {
+      pendingToasts.push({ message, variant, duration });
+      return;
+    }
+    spawnToast(stack, message, variant, duration);
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    if (!pendingToasts.length) {
+      return;
+    }
+    const stack = document.getElementById(stackId);
+    if (!stack) {
+      return;
+    }
+    pendingToasts.splice(0).forEach(toast => {
+      spawnToast(stack, toast.message, toast.variant, toast.duration);
+    });
+  }, { once: true });
+
+  function setGlobalLoading(active, label = 'Working...') {
+    const overlay = document.getElementById(overlayId);
+    if (!overlay) {
+      return;
+    }
+    overlay.hidden = !active;
+    overlay.setAttribute('aria-hidden', String(!active));
+    const labelNode = document.getElementById(overlayLabelId);
+    if (labelNode && label) {
+      labelNode.textContent = label;
+    }
+  }
+
+  return { showToast, setGlobalLoading };
+})();
+
+const notify = {
+  info(message, options) {
+    uiFeedback.showToast(message, 'info', options);
+  },
+  success(message, options) {
+    uiFeedback.showToast(message, 'success', options);
+  },
+  error(message, options) {
+    uiFeedback.showToast(message, 'error', options);
+  }
+};
+
+async function withGlobalLoading(label, action) {
+  uiFeedback.setGlobalLoading(true, label);
+  try {
+    return await action();
+  } finally {
+    uiFeedback.setGlobalLoading(false);
+  }
+}
+
+window.nativeAlert = window.alert;
+window.alert = message => {
+  const normalized = typeof message === 'string' ? message : String(message ?? '');
+  const lower = normalized.toLowerCase();
+  let variant = 'info';
+  if (/(error|fail|denied|invalid|mislukt)/i.test(lower)) {
+    variant = 'error';
+  } else if (/(success|saved|created|updated|gelukt)/i.test(lower) || normalized.includes('✓')) {
+    variant = 'success';
+  }
+  notify[variant](normalized);
+};
+
 window.addEventListener('DOMContentLoaded', () => {
   setupPermissionHandlers();
   refreshSiteSelectors();
@@ -216,13 +312,13 @@ function userCanManageSite(siteName) {
       }
 
       if (editingPermissionsTarget.role === 'admin') {
-        alert('Administrator accounts already have full access.');
+        notify.info('Administrator accounts already have full access.');
         return;
       }
 
       const userId = document.getElementById('permissionsUserId')?.value;
       if (!userId) {
-        alert('Unable to determine which user to update.');
+        notify.error('Unable to determine which user to update.');
         return;
       }
 
@@ -235,7 +331,7 @@ function userCanManageSite(siteName) {
       };
 
       if (permissions.siteAccess.mode === 'limited' && permissions.siteAccess.sites.length === 0) {
-        alert('Select at least one site or choose "All sites".');
+        notify.info('Select at least one site or choose "All sites".');
         return;
       }
 
@@ -251,7 +347,7 @@ function userCanManageSite(siteName) {
           throw new Error(data.message || 'Failed to save permissions');
         }
 
-        alert(data.message || 'Permissions updated successfully');
+        notify.success(data.message || 'Permissions updated successfully');
         editingPermissionsTarget = data.user;
 
         if (currentUser.id === data.user.id) {
@@ -262,7 +358,7 @@ function userCanManageSite(siteName) {
         loadUsers();
         refreshNavAvailability();
       } catch (err) {
-        alert('Error saving permissions: ' + err.message);
+        notify.error('Error saving permissions: ' + err.message);
       }
     }
   }
@@ -798,20 +894,23 @@ async function loadDashboard() {
 // CREATE SITE
 async function createSite() {
   if (!userHasPermission('canManageSites')) {
-    alert('You do not have permission to create sites.');
+    notify.error('You do not have permission to create sites.');
     return;
   }
 
   const access = currentUser?.permissions?.siteAccess;
   if (currentUser && currentUser.role !== 'admin' && access && access.mode !== 'all') {
-    alert('This account cannot create new sites. Ask an administrator to upgrade your access.');
+    notify.error('This account cannot create new sites. Ask an administrator to upgrade your access.');
     return;
   }
 
   const siteName = document.getElementById('siteNameInput').value.trim();
   const port = document.getElementById('sitePortInput').value.trim();
   
-  if (!siteName) return alert('Enter a site name');
+  if (!siteName) {
+    notify.info('Enter a site name');
+    return;
+  }
 
   const body = { siteName };
   if (port) body.port = parseInt(port);
@@ -824,13 +923,16 @@ async function createSite() {
     });
     
     const data = await res.json();
-    alert(data.message || "Site created");
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to create site');
+    }
+    notify.success(data.message || 'Site created');
     document.getElementById('siteNameInput').value = "";
     document.getElementById('sitePortInput').value = "";
     fetchSites();
     showPage('manageSites');
   } catch (err) {
-    alert('Error creating site: ' + err.message);
+    notify.error('Error creating site: ' + err.message);
   }
 }
 
@@ -925,7 +1027,7 @@ async function fetchSites() {
 
 async function deleteSite(siteName) {
   if (!userCanManageSite(siteName)) {
-    alert('You do not have permission to delete this site.');
+    notify.error('You do not have permission to delete this site.');
     return;
   }
 
@@ -934,7 +1036,10 @@ async function deleteSite(siteName) {
   try {
     const res = await authFetch(`/api/sites/${siteName}`, { method: 'DELETE' });
     const data = await res.json();
-    alert(data.message || "Deleted");
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to delete site');
+    }
+    notify.success(data.message || 'Deleted');
     if (currentSite === siteName) {
       currentSite = null;
       currentPath = '';
@@ -959,7 +1064,7 @@ async function deleteSite(siteName) {
     refreshNavAvailability();
     fetchSites();
   } catch (err) {
-    alert('Error deleting site: ' + err.message);
+    notify.error('Error deleting site: ' + err.message);
   }
 }
 
@@ -970,7 +1075,7 @@ function openSite(siteName, port) {
 
 async function editSitePort(siteName, currentPort) {
   if (!userCanManageSite(siteName)) {
-    alert('You do not have permission to modify this site.');
+    notify.error('You do not have permission to modify this site.');
     return;
   }
 
@@ -979,7 +1084,7 @@ async function editSitePort(siteName, currentPort) {
   
   const port = parseInt(newPort);
   if (port < 1024 || port > 65535) {
-    alert('Port must be between 1024 and 65535');
+    notify.info('Port must be between 1024 and 65535.');
     return;
   }
 
@@ -991,10 +1096,13 @@ async function editSitePort(siteName, currentPort) {
     });
     
     const data = await res.json();
-    alert(data.message || "Port updated");
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to update port');
+    }
+    notify.success(data.message || 'Port updated');
     fetchSites();
   } catch (err) {
-    alert('Error updating port: ' + err.message);
+    notify.error('Error updating port: ' + err.message);
   }
 }
 
@@ -1002,7 +1110,7 @@ async function editSitePort(siteName, currentPort) {
 // FILE BROWSER
 function openSiteFiles(siteName) {
   if (!userCanSeeSite(siteName)) {
-    alert('You do not have access to this site.');
+    notify.error('You do not have access to this site.');
     return;
   }
 
@@ -1197,7 +1305,7 @@ function navigateUp() {
 
 async function createNewFile() {
   if (!userCanManageCurrentSite()) {
-    alert('You do not have permission to create files in this site.');
+    notify.error('You do not have permission to create files in this site.');
     return;
   }
 
@@ -1214,16 +1322,19 @@ async function createNewFile() {
     });
     
     const data = await res.json();
-    alert(data.message || 'File created');
+    if (!res.ok) {
+      throw new Error(data.message || 'Unable to create file');
+    }
+    notify.success(data.message || 'File created');
     loadFiles();
   } catch (err) {
-    alert('Error creating file: ' + err.message);
+    notify.error('Error creating file: ' + err.message);
   }
 }
 
 async function createNewFolder() {
   if (!userCanManageCurrentSite()) {
-    alert('You do not have permission to create folders in this site.');
+    notify.error('You do not have permission to create folders in this site.');
     return;
   }
 
@@ -1240,16 +1351,19 @@ async function createNewFolder() {
     });
     
     const data = await res.json();
-    alert(data.message || 'Folder created');
+    if (!res.ok) {
+      throw new Error(data.message || 'Unable to create folder');
+    }
+    notify.success(data.message || 'Folder created');
     loadFiles();
   } catch (err) {
-    alert('Error creating folder: ' + err.message);
+    notify.error('Error creating folder: ' + err.message);
   }
 }
 
 async function deleteFileOrFolder(name, type) {
   if (!userCanManageCurrentSite()) {
-    alert('You do not have permission to delete items in this site.');
+    notify.error('You do not have permission to delete items in this site.');
     return;
   }
 
@@ -1263,10 +1377,13 @@ async function deleteFileOrFolder(name, type) {
     });
     
     const data = await res.json();
-    alert(data.message || 'Deleted');
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to delete');
+    }
+    notify.success(data.message || 'Deleted');
     loadFiles();
   } catch (err) {
-    alert('Error deleting: ' + err.message);
+    notify.error('Error deleting: ' + err.message);
   }
 }
 
@@ -1297,7 +1414,7 @@ async function editFile(fileName) {
       }
     }
   } catch (err) {
-    alert('Error loading file: ' + err.message);
+    notify.error('Error loading file: ' + err.message);
   }
 }
 
@@ -1305,7 +1422,7 @@ async function saveFile() {
   if (!currentEditingFile) return;
 
   if (!userCanManageCurrentSite()) {
-    alert('You do not have permission to edit this file.');
+    notify.error('You do not have permission to edit this file.');
     return;
   }
   
@@ -1319,9 +1436,12 @@ async function saveFile() {
     });
     
     const data = await res.json();
-    alert(data.message || 'File saved');
+    if (!res.ok) {
+      throw new Error(data.message || 'Unable to save file');
+    }
+    notify.success(data.message || 'File saved');
   } catch (err) {
-    alert('Error saving file: ' + err.message);
+    notify.error('Error saving file: ' + err.message);
   }
 }
 
@@ -1446,7 +1566,7 @@ async function loadUsers() {
 
 async function createUser() {
   if (!userHasPermission('canManageUsers')) {
-    alert('You do not have permission to create users.');
+    notify.error('You do not have permission to create users.');
     return;
   }
 
@@ -1456,7 +1576,8 @@ async function createUser() {
   const email = document.getElementById('newUserEmail').value.trim();
   
   if (!username || !password) {
-    return alert('Username and password required');
+    notify.info('Username and password required');
+    return;
   }
 
   const permissions = {
@@ -1473,7 +1594,7 @@ async function createUser() {
     permissions.canManageTunnel = true;
     permissions.canManageMail = true;
   } else if (permissions.siteAccess.mode === 'limited' && permissions.siteAccess.sites.length === 0) {
-    alert('Select at least one site or choose "All sites".');
+    notify.info('Select at least one site or choose "All sites".');
     return;
   }
   
@@ -1485,7 +1606,10 @@ async function createUser() {
     });
     
     const data = await res.json();
-    alert(data.message || 'User created');
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to create user');
+    }
+    notify.success(data.message || 'User created');
     document.getElementById('newUsername').value = '';
     document.getElementById('newPassword').value = '';
     document.getElementById('newUserEmail').value = '';
@@ -1499,7 +1623,7 @@ async function createUser() {
     refreshSiteSelectors();
     loadUsers();
   } catch (err) {
-    alert('Error creating user: ' + err.message);
+    notify.error('Error creating user: ' + err.message);
   }
 }
 
@@ -1515,9 +1639,12 @@ async function changeUserPassword(userId, username) {
     });
     
     const data = await res.json();
-    alert(data.message || 'Password updated');
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to update password');
+    }
+    notify.success(data.message || 'Password updated');
   } catch (err) {
-    alert('Error updating password: ' + err.message);
+    notify.error('Error updating password: ' + err.message);
   }
 }
 
@@ -1530,10 +1657,13 @@ async function deleteUser(userId) {
     });
     
     const data = await res.json();
-    alert(data.message || 'User deleted');
+    if (!res.ok) {
+      throw new Error(data.message || 'Failed to delete user');
+    }
+    notify.success(data.message || 'User deleted');
     loadUsers();
   } catch (err) {
-    alert('Error deleting user: ' + err.message);
+    notify.error('Error deleting user: ' + err.message);
   }
 }
 
@@ -1565,15 +1695,18 @@ async function changeOwnPassword() {
   const confirmPassword = document.getElementById('confirmOwnPassword').value.trim();
   
   if (!newPassword || !confirmPassword) {
-    return alert('Please fill in both password fields');
+    notify.info('Please fill in both password fields');
+    return;
   }
   
   if (newPassword !== confirmPassword) {
-    return alert('Passwords do not match');
+    notify.info('Passwords do not match');
+    return;
   }
   
   if (newPassword.length < 6) {
-    return alert('Password must be at least 6 characters');
+    notify.info('Password must be at least 6 characters');
+    return;
   }
   
   try {
@@ -1584,12 +1717,12 @@ async function changeOwnPassword() {
     });
     
     const data = await safeJsonParse(res);
-    alert(data.message || 'Password updated. Please log in again.');
+    notify.success(data.message || 'Password updated. Please log in again.');
     document.getElementById('newOwnPassword').value = '';
     document.getElementById('confirmOwnPassword').value = '';
     logout();
   } catch (err) {
-    alert('Error updating password: ' + err.message);
+    notify.error('Error updating password: ' + err.message);
   }
 }
 
@@ -1608,11 +1741,11 @@ async function changeOwnEmail() {
       throw new Error(data.message || 'Failed to update email');
     }
     
-    alert(data.message || 'Email updated successfully');
+    notify.success(data.message || 'Email updated successfully');
     currentUser.email = newEmail;
     document.getElementById('currentUserEmail').textContent = newEmail || 'Not set';
   } catch (err) {
-    alert('Error updating email: ' + err.message);
+    notify.error('Error updating email: ' + err.message);
   }
 }
 
@@ -1646,7 +1779,7 @@ async function loadMailConfig() {
 
 async function saveMailConfig() {
   if (!userHasPermission('canManageMail')) {
-    alert('You do not have permission to update mail settings.');
+    notify.error('You do not have permission to update mail settings.');
     return;
   }
 
@@ -1679,10 +1812,10 @@ async function saveMailConfig() {
       throw new Error(data.message || 'Failed to save mail configuration');
     }
     
-    alert(data.message || 'Mail configuration saved successfully');
+    notify.success(data.message || 'Mail configuration saved successfully');
     document.getElementById('mailPassword').value = ''; // Clear password field
   } catch (err) {
-    alert('Error saving mail configuration: ' + err.message);
+    notify.error('Error saving mail configuration: ' + err.message);
   }
 }
 
@@ -1727,7 +1860,7 @@ async function setup2FA() {
     document.getElementById('twoFactorDisabled').style.display = 'none';
     document.getElementById('twoFactorSetup').style.display = 'block';
   } catch (err) {
-    alert('Error setting up 2FA: ' + err.message);
+    notify.error('Error setting up 2FA: ' + err.message);
   }
 }
 
@@ -1735,7 +1868,8 @@ async function verify2FA() {
   const token = document.getElementById('verifyToken').value.trim();
   
   if (!token || token.length !== 6) {
-    return alert('Please enter a valid 6-digit code');
+    notify.info('Please enter a valid 6-digit code');
+    return;
   }
   
   try {
@@ -1751,11 +1885,11 @@ async function verify2FA() {
       throw new Error(data.message || 'Failed to enable 2FA');
     }
     
-    alert(data.message || '2FA enabled successfully!');
+    notify.success(data.message || '2FA enabled successfully!');
     document.getElementById('verifyToken').value = '';
     load2FAStatus();
   } catch (err) {
-    alert('Error verifying 2FA: ' + err.message);
+    notify.error('Error verifying 2FA: ' + err.message);
   }
 }
 
@@ -1768,7 +1902,8 @@ async function disable2FA() {
   const token = document.getElementById('disable2FAToken').value.trim();
   
   if (!token || token.length !== 6) {
-    return alert('Please enter a valid 6-digit code');
+    notify.info('Please enter a valid 6-digit code');
+    return;
   }
   
   if (!confirm('Are you sure you want to disable 2FA? This will reduce your account security.')) {
@@ -1788,45 +1923,54 @@ async function disable2FA() {
       throw new Error(data.message || 'Failed to disable 2FA');
     }
     
-    alert(data.message || '2FA disabled successfully');
+    notify.success(data.message || '2FA disabled successfully');
     document.getElementById('disable2FAToken').value = '';
     load2FAStatus();
   } catch (err) {
-    alert('Error disabling 2FA: ' + err.message);
+    notify.error('Error disabling 2FA: ' + err.message);
   }
 }
 
 
 // TUNNEL
 async function startTunnel() {
-  try {
-    const res = await authFetch('/api/tunnel/start', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.message || 'Tunnel kon niet starten');
+  await withGlobalLoading('Starting tunnel...', async () => {
+    try {
+      const res = await authFetch('/api/tunnel/start', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Tunnel kon niet starten');
+      }
+      notify.success(data.message || 'Tunnel started');
+      tunnelState = { ...(tunnelState || {}), ...data };
+      updateTunnelStatus(tunnelState);
+      await loadDashboard();
+    } catch (err) {
+      notify.error('Error starting tunnel: ' + err.message);
+      tunnelState = { ...(tunnelState || {}), running: false, lastError: err.message };
+      updateTunnelStatus(tunnelState);
+      throw err;
     }
-    alert(data.message || 'Tunnel started');
-    tunnelState = { ...(tunnelState || {}), ...data };
-    updateTunnelStatus(tunnelState);
-    loadDashboard();
-  } catch (err) {
-    alert('Error starting tunnel: ' + err.message);
-    tunnelState = { ...(tunnelState || {}), running: false, lastError: err.message };
-    updateTunnelStatus(tunnelState);
-  }
+  });
 }
 
 async function stopTunnel() {
-  try {
-    const res = await authFetch('/api/tunnel/stop', { method: 'POST' });
-    const data = await res.json();
-    alert(data.message || 'Tunnel stopped');
-    tunnelState = { ...(tunnelState || {}), running: false, lastError: null };
-    updateTunnelStatus(tunnelState);
-    loadDashboard();
-  } catch (err) {
-    alert('Error stopping tunnel: ' + err.message);
-  }
+  await withGlobalLoading('Stopping tunnel...', async () => {
+    try {
+      const res = await authFetch('/api/tunnel/stop', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Failed to stop tunnel');
+      }
+      notify.success(data.message || 'Tunnel stopped');
+      tunnelState = { ...(tunnelState || {}), running: false, lastError: null };
+      updateTunnelStatus(tunnelState);
+      await loadDashboard();
+    } catch (err) {
+      notify.error('Error stopping tunnel: ' + err.message);
+      throw err;
+    }
+  });
 }
 
 async function loadTunnelConfig() {
@@ -1909,7 +2053,7 @@ async function saveTunnelToken() {
   const token = document.getElementById('tunnelTokenInput').value;
 
   if (!token || !token.trim()) {
-    alert('Voer een geldige Cloudflare token in.');
+    notify.info('Voer een geldige Cloudflare token in.');
     return;
   }
 
@@ -1926,11 +2070,11 @@ async function saveTunnelToken() {
       throw new Error(data.message || 'Token opslaan mislukt');
     }
 
-    alert(data.message || 'Token opgeslagen');
+    notify.success(data.message || 'Token opgeslagen');
     loadTunnelConfig();
     loadDashboard();
   } catch (err) {
-    alert('Error saving token: ' + err.message);
+    notify.error('Error saving token: ' + err.message);
   }
 }
 
@@ -1947,11 +2091,11 @@ async function clearTunnelToken() {
       throw new Error(data.message || 'Token verwijderen mislukt');
     }
 
-    alert(data.message || 'Token verwijderd');
+    notify.success(data.message || 'Token verwijderd');
     loadTunnelConfig();
     loadDashboard();
   } catch (err) {
-    alert('Error removing token: ' + err.message);
+    notify.error('Error removing token: ' + err.message);
   }
 }
 
@@ -2043,8 +2187,8 @@ async function saveTunnelConfig() {
       throw new Error(data.message || 'Kon configuratie niet opslaan');
     }
 
-    alert(data.message || 'Configuration saved');
+    notify.success(data.message || 'Configuration saved');
   } catch (err) {
-    alert('Error saving config: ' + err.message);
+    notify.error('Error saving config: ' + err.message);
   }
 }

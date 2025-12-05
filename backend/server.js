@@ -2,18 +2,116 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const compression = require('compression');
+const helmet = require('helmet');
+const cors = require('cors');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 const tunnel = require('./tunnel');
 const provisioner = require('./provisioner');
 const auth = require('./auth');
 const mailConfig = require('./mailConfig');
 const mailer = require('./mailer');
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+
+const STATIC_CACHE_MAX_AGE = provisioner.isDevelopment ? 0 : 1000 * 60 * 60 * 6; // 6 hours
+const JSON_BODY_LIMIT = '1mb';
+const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2MB cap for in-browser editor
+const SITE_NAME_PATTERN = /^[a-z0-9](?:[a-z0-9-_.]{0,62}[a-z0-9])?$/i;
+const SITES_ROOT = provisioner.SITES_DIR;
 
 let lastKnownTunnelState = tunnel.isRunning();
 
-app.use(express.static('public'));
-app.use(express.json());
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+app.use(cors());
+app.use(compression());
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
+app.use(morgan(provisioner.isDevelopment ? 'dev' : 'combined'));
+app.use(express.static('public', {
+  maxAge: STATIC_CACHE_MAX_AGE,
+  setHeaders(res, servedPath) {
+    if (servedPath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  }
+}));
+
+function createHttpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+function normalizeSiteName(value, { strict = false } = {}) {
+  if (typeof value !== 'string') {
+    throw createHttpError(400, 'Site name is required');
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw createHttpError(400, 'Site name is required');
+  }
+  if (trimmed.includes('\0') || trimmed.includes('..') || /[\\/]/.test(trimmed)) {
+    throw createHttpError(400, 'Site name contains invalid characters');
+  }
+  if (strict && !SITE_NAME_PATTERN.test(trimmed)) {
+    throw createHttpError(400, 'Site names may use letters, numbers, "-", "_" or "." and must start/end with a letter or number.');
+  }
+  return trimmed;
+}
+
+function resolveSitePath(siteName, targetPath = '') {
+  const safeSite = normalizeSiteName(siteName);
+  const siteRoot = path.join(SITES_ROOT, safeSite);
+  const normalizedTarget = targetPath ? path.normalize(targetPath) : '';
+  const candidate = path.normalize(path.join(siteRoot, normalizedTarget));
+  if (!candidate.startsWith(siteRoot)) {
+    throw createHttpError(403, 'Access denied');
+  }
+  return candidate;
+}
+
+function coercePort(value) {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 1024 || numeric > 65535) {
+    return null;
+  }
+  return numeric;
+}
+
+function findNextAvailablePort() {
+  const usedPorts = new Set((sites || []).map(entry => Number(entry.port)).filter(Number.isFinite));
+  let candidate = usedPorts.size ? Math.max(...usedPorts) + 1 : 8080;
+  if (candidate < 8080) {
+    candidate = 8080;
+  }
+  while (usedPorts.has(candidate) && candidate <= 65535) {
+    candidate += 1;
+  }
+  return candidate <= 65535 ? candidate : null;
+}
+
+const authLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 25,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ message: 'Too many authentication attempts. Please try again in a few minutes.' })
+});
+
+const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ message: 'Too many reset attempts. Wait a few minutes and retry.' })
+});
 
 // Authentication middleware
 function requireAuth(req, res, next) {
@@ -83,25 +181,29 @@ function userCanManageSite(user, siteName) {
 }
 
 function ensureSiteReadAccess(req, res, next) {
-  const siteName = req.params.name || req.body.siteName;
-  if (!siteName) {
-    return res.status(400).json({ message: 'Site name required' });
+  try {
+    const siteName = normalizeSiteName(req.params.name || req.body.siteName);
+    if (!userCanAccessSite(req.user, siteName)) {
+      return res.status(403).json({ message: 'Access denied for this site' });
+    }
+    req.siteName = siteName;
+    next();
+  } catch (err) {
+    res.status(err.status || 400).json({ message: err.message });
   }
-  if (!userCanAccessSite(req.user, siteName)) {
-    return res.status(403).json({ message: 'Access denied for this site' });
-  }
-  next();
 }
 
 function ensureSiteManageAccess(req, res, next) {
-  const siteName = req.params.name || req.body.siteName;
-  if (!siteName) {
-    return res.status(400).json({ message: 'Site name required' });
+  try {
+    const siteName = normalizeSiteName(req.params.name || req.body.siteName);
+    if (!userCanManageSite(req.user, siteName)) {
+      return res.status(403).json({ message: 'Management access denied for this site' });
+    }
+    req.siteName = siteName;
+    next();
+  } catch (err) {
+    res.status(err.status || 400).json({ message: err.message });
   }
-  if (!userCanManageSite(req.user, siteName)) {
-    return res.status(403).json({ message: 'Management access denied for this site' });
-  }
-  next();
 }
 
 async function notifyTunnelState(running, meta = {}) {
@@ -178,7 +280,7 @@ let sites = loadSitesFromDisk();
 persistSites();
 
 // Authentication endpoints
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authLimiter, (req, res) => {
   const { username, password } = req.body;
   
   if (!username || !password) {
@@ -199,7 +301,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-app.post('/api/auth/2fa/verify', (req, res) => {
+app.post('/api/auth/2fa/verify', authLimiter, (req, res) => {
   const { challengeToken, code } = req.body || {};
 
   if (!challengeToken || !code) {
@@ -215,7 +317,7 @@ app.post('/api/auth/2fa/verify', (req, res) => {
   }
 });
 
-app.post('/api/auth/request-password-reset', async (req, res) => {
+app.post('/api/auth/request-password-reset', passwordResetLimiter, async (req, res) => {
   const { identifier } = req.body || {};
 
   try {
@@ -247,15 +349,19 @@ app.get('/api/auth/reset/validate', (req, res) => {
   }
 });
 
-app.post('/api/auth/reset-password', (req, res) => {
+app.post('/api/auth/reset-password', passwordResetLimiter, (req, res) => {
   const { token, newPassword } = req.body || {};
 
   if (!token || !newPassword) {
     return res.status(400).json({ message: 'Token and new password are required' });
   }
 
+  if (typeof newPassword !== 'string' || newPassword.trim().length < 8) {
+    return res.status(400).json({ message: 'Choose a password with at least 8 characters.' });
+  }
+
   try {
-    const result = auth.resetPasswordWithToken(token, newPassword);
+    const result = auth.resetPasswordWithToken(token, newPassword.trim());
     res.json({ message: 'Password reset successfully', ...result });
   } catch (err) {
     console.error('Error resetting password:', err.message);
@@ -516,39 +622,46 @@ app.get('/api/sites', requireAuth, (req, res) => {
 
 // Add site
 app.post('/api/sites', requireAuth, requirePermission('canManageSites'), (req, res) => {
-  const { siteName, port } = req.body;
-  if (!siteName) return res.status(400).json({ message: 'Site name required' });
-
   if (req.user.role !== 'admin' && req.user.permissions?.siteAccess?.mode !== 'all') {
     return res.status(403).json({ message: 'Cannot create new sites with limited access' });
   }
 
   try {
-    const existing = sites.find(s => s.name === siteName);
-    if (!existing) {
-      // Find next available port if not specified
-      const sitePort = port || (sites.length > 0 ? Math.max(...sites.map(s => s.port)) + 1 : 8080);
-      
-      // Provision the site (create directories, nginx config, samba share)
-      provisioner.provisionSite(siteName, sitePort);
-      
-      // Add to sites list
-  sites.push({ name: siteName, port: sitePort });
-  persistSites();
-      
-      res.json({ message: 'Site created successfully', port: sitePort });
-    } else {
-      res.json({ message: 'Site already exists' });
+    const siteName = normalizeSiteName(req.body?.siteName, { strict: true });
+    const requestedPort = req.body?.port !== undefined ? coercePort(req.body.port) : undefined;
+
+    if (req.body?.port !== undefined && !requestedPort) {
+      return res.status(400).json({ message: 'Port must be an integer between 1024 and 65535.' });
     }
+
+    const duplicate = sites.find(entry => entry.name.toLowerCase() === siteName.toLowerCase());
+    if (duplicate) {
+      return res.status(409).json({ message: 'Site already exists' });
+    }
+
+    if (requestedPort && sites.some(entry => Number(entry.port) === requestedPort)) {
+      return res.status(409).json({ message: 'Port already allocated to another site.' });
+    }
+
+    const sitePort = requestedPort ?? findNextAvailablePort();
+    if (!sitePort) {
+      return res.status(400).json({ message: 'Unable to find an available port. Specify one manually.' });
+    }
+
+    provisioner.provisionSite(siteName, sitePort);
+    sites.push({ name: siteName, port: sitePort });
+    persistSites();
+
+    res.status(201).json({ message: 'Site created successfully', port: sitePort });
   } catch (err) {
     console.error('Error creating site:', err);
-    res.status(500).json({ message: 'Failed to create site: ' + err.message });
+    res.status(err.status || 500).json({ message: 'Failed to create site: ' + err.message });
   }
 });
 
 // Delete site
 app.delete('/api/sites/:name', requireAuth, requirePermission('canManageSites'), ensureSiteManageAccess, (req, res) => {
-  const siteName = req.params.name;
+  const siteName = req.siteName;
   
   try {
     // Remove site provisioning
@@ -567,28 +680,31 @@ app.delete('/api/sites/:name', requireAuth, requirePermission('canManageSites'),
 
 // Update site port
 app.put('/api/sites/:name/port', requireAuth, requirePermission('canManageSites'), ensureSiteManageAccess, (req, res) => {
-  const siteName = req.params.name;
-  const { port } = req.body;
-  
-  if (!port || port < 1024 || port > 65535) {
+  const siteName = req.siteName;
+  const desiredPort = coercePort(req.body?.port);
+
+  if (!desiredPort) {
     return res.status(400).json({ message: 'Invalid port number' });
   }
-  
+
   try {
     const site = sites.find(s => s.name === siteName);
     if (!site) {
       return res.status(404).json({ message: 'Site not found' });
     }
-    
-    // Update port
-    site.port = port;
-  persistSites();
-    
-    // Regenerate nginx config with new port
-    provisioner.generateNginxConfig(siteName, port);
+
+    const conflicting = sites.find(entry => entry.name !== siteName && Number(entry.port) === desiredPort);
+    if (conflicting) {
+      return res.status(409).json({ message: `Port already used by ${conflicting.name}` });
+    }
+
+    site.port = desiredPort;
+	persistSites();
+
+    provisioner.generateNginxConfig(siteName, desiredPort);
     provisioner.reloadNginx();
-    
-    res.json({ message: 'Port updated successfully', port });
+
+    res.json({ message: 'Port updated successfully', port: desiredPort });
   } catch (err) {
     console.error('Error updating port:', err);
     res.status(500).json({ message: 'Failed to update port: ' + err.message });
@@ -597,28 +713,19 @@ app.put('/api/sites/:name/port', requireAuth, requirePermission('canManageSites'
 
 // File management APIs
 app.get('/api/sites/:name/files', requireAuth, ensureSiteReadAccess, (req, res) => {
-  const siteName = req.params.name;
+  const siteName = req.siteName;
   const subPath = req.query.path || '';
-  
+
   try {
-    const sitesDir = provisioner.isDevelopment 
-      ? path.join(__dirname, '../sites') 
-      : '/opt/lwui/sites';
-    const fullPath = path.join(sitesDir, siteName, subPath);
-    
-    // Security check - ensure path is within site directory
-    if (!fullPath.startsWith(path.join(sitesDir, siteName))) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
-    
+    const fullPath = resolveSitePath(siteName, subPath);
+
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ message: 'Path not found' });
     }
-    
+
     const stat = fs.statSync(fullPath);
-    
+
     if (stat.isDirectory()) {
-      // List directory contents
       const items = fs.readdirSync(fullPath).map(name => {
         const itemPath = path.join(fullPath, name);
         const itemStat = fs.statSync(itemPath);
@@ -631,8 +738,7 @@ app.get('/api/sites/:name/files', requireAuth, ensureSiteReadAccess, (req, res) 
       });
       res.json({ type: 'directory', items });
     } else {
-      // Return file info
-      res.json({ 
+      res.json({
         type: 'file',
         name: path.basename(fullPath),
         size: stat.size,
@@ -641,12 +747,12 @@ app.get('/api/sites/:name/files', requireAuth, ensureSiteReadAccess, (req, res) 
     }
   } catch (err) {
     console.error('Error listing files:', err);
-    res.status(500).json({ message: 'Failed to list files: ' + err.message });
+    res.status(err.status || 500).json({ message: 'Failed to list files: ' + err.message });
   }
 });
 
 app.get('/api/sites/:name/files/read', requireAuth, ensureSiteReadAccess, (req, res) => {
-  const siteName = req.params.name;
+  const siteName = req.siteName;
   const filePath = req.query.path;
   
   if (!filePath) {
@@ -654,16 +760,8 @@ app.get('/api/sites/:name/files/read', requireAuth, ensureSiteReadAccess, (req, 
   }
   
   try {
-    const sitesDir = provisioner.isDevelopment 
-      ? path.join(__dirname, '../sites') 
-      : '/opt/lwui/sites';
-    const fullPath = path.join(sitesDir, siteName, filePath);
-    
-    // Security check
-    if (!fullPath.startsWith(path.join(sitesDir, siteName))) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
-    
+    const fullPath = resolveSitePath(siteName, filePath);
+
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ message: 'File not found' });
     }
@@ -672,62 +770,50 @@ app.get('/api/sites/:name/files/read', requireAuth, ensureSiteReadAccess, (req, 
     res.json({ content });
   } catch (err) {
     console.error('Error reading file:', err);
-    res.status(500).json({ message: 'Failed to read file: ' + err.message });
+    res.status(err.status || 500).json({ message: 'Failed to read file: ' + err.message });
   }
 });
 
 app.post('/api/sites/:name/files/write', requireAuth, requirePermission('canManageSites'), ensureSiteManageAccess, (req, res) => {
-  const siteName = req.params.name;
-  const { path: filePath, content } = req.body;
+  const siteName = req.siteName;
+  const { path: filePath, content } = req.body || {};
   
   if (!filePath || content === undefined) {
     return res.status(400).json({ message: 'File path and content required' });
   }
   
   try {
-    const sitesDir = provisioner.isDevelopment 
-      ? path.join(__dirname, '../sites') 
-      : '/opt/lwui/sites';
-    const fullPath = path.join(sitesDir, siteName, filePath);
-    
-    // Security check
-    if (!fullPath.startsWith(path.join(sitesDir, siteName))) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
-    
-    // Ensure directory exists
+    const fullPath = resolveSitePath(siteName, filePath);
     const dir = path.dirname(fullPath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+
+    const safeContent = typeof content === 'string' ? content : String(content ?? '');
+    const size = Buffer.byteLength(safeContent, 'utf8');
+    if (size > MAX_FILE_SIZE_BYTES) {
+      return res.status(413).json({ message: 'File too large to edit via browser (limit 2 MB).' });
+    }
     
-    fs.writeFileSync(fullPath, content, 'utf8');
+    fs.writeFileSync(fullPath, safeContent, 'utf8');
     res.json({ message: 'File saved successfully' });
   } catch (err) {
     console.error('Error writing file:', err);
-    res.status(500).json({ message: 'Failed to write file: ' + err.message });
+    res.status(err.status || 500).json({ message: 'Failed to write file: ' + err.message });
   }
 });
 
 // Create new file or folder
 app.post('/api/sites/:name/files/create', requireAuth, requirePermission('canManageSites'), ensureSiteManageAccess, (req, res) => {
-  const siteName = req.params.name;
-  const { path: itemPath, type, content } = req.body;
+  const siteName = req.siteName;
+  const { path: itemPath, type, content } = req.body || {};
   
   if (!itemPath) {
     return res.status(400).json({ message: 'Path required' });
   }
   
   try {
-    const sitesDir = provisioner.isDevelopment 
-      ? path.join(__dirname, '../sites') 
-      : '/opt/lwui/sites';
-    const fullPath = path.join(sitesDir, siteName, itemPath);
-    
-    // Security check
-    if (!fullPath.startsWith(path.join(sitesDir, siteName))) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
+    const fullPath = resolveSitePath(siteName, itemPath);
     
     if (fs.existsSync(fullPath)) {
       return res.status(400).json({ message: 'File or folder already exists' });
@@ -735,24 +821,30 @@ app.post('/api/sites/:name/files/create', requireAuth, requirePermission('canMan
     
     if (type === 'directory') {
       fs.mkdirSync(fullPath, { recursive: true });
-      res.json({ message: 'Folder created successfully' });
-    } else {
-      // Ensure parent directory exists
-      const dir = path.dirname(fullPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(fullPath, content || '', 'utf8');
-      res.json({ message: 'File created successfully' });
+      return res.json({ message: 'Folder created successfully' });
     }
+
+    const dir = path.dirname(fullPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    const safeContent = typeof content === 'string' ? content : String(content ?? '');
+    const size = Buffer.byteLength(safeContent, 'utf8');
+    if (size > MAX_FILE_SIZE_BYTES) {
+      return res.status(413).json({ message: 'File too large to create via browser (limit 2 MB).' });
+    }
+
+    fs.writeFileSync(fullPath, safeContent, 'utf8');
+    res.json({ message: 'File created successfully' });
   } catch (err) {
     console.error('Error creating file/folder:', err);
-    res.status(500).json({ message: 'Failed to create: ' + err.message });
+    res.status(err.status || 500).json({ message: 'Failed to create: ' + err.message });
   }
 });
 
 app.delete('/api/sites/:name/files/delete', requireAuth, requirePermission('canManageSites'), ensureSiteManageAccess, (req, res) => {
-  const siteName = req.params.name;
+  const siteName = req.siteName;
   const filePath = req.query.path;
   
   if (!filePath) {
@@ -760,16 +852,8 @@ app.delete('/api/sites/:name/files/delete', requireAuth, requirePermission('canM
   }
   
   try {
-    const sitesDir = provisioner.isDevelopment 
-      ? path.join(__dirname, '../sites') 
-      : '/opt/lwui/sites';
-    const fullPath = path.join(sitesDir, siteName, filePath);
-    
-    // Security check
-    if (!fullPath.startsWith(path.join(sitesDir, siteName))) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
-    
+    const fullPath = resolveSitePath(siteName, filePath);
+
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ message: 'File not found' });
     }
@@ -784,7 +868,7 @@ app.delete('/api/sites/:name/files/delete', requireAuth, requirePermission('canM
     res.json({ message: 'Deleted successfully' });
   } catch (err) {
     console.error('Error deleting file:', err);
-    res.status(500).json({ message: 'Failed to delete: ' + err.message });
+    res.status(err.status || 500).json({ message: 'Failed to delete: ' + err.message });
   }
 });
 

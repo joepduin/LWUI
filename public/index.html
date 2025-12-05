@@ -7,104 +7,126 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="canvas" aria-hidden="true">
-    <div class="canvas-shape shape-one"></div>
-    <div class="canvas-shape shape-two"></div>
-  </div>
+  <div class="background-grid" aria-hidden="true"></div>
+  <div class="orb orb-one" aria-hidden="true"></div>
+  <div class="orb orb-two" aria-hidden="true"></div>
 
   <section id="loginBox" class="auth-screen">
-    <div class="auth-card">
-      <div class="auth-header">
-        <div class="auth-mark">LW</div>
-        <div class="auth-headings">
-          <h1>Local Website UI</h1>
-          <p>Sign in to manage local sites, tunnels, and users.</p>
+    <div class="auth-grid">
+      <div class="auth-panel">
+        <div class="auth-panel-head">
+          <div class="auth-mark">LW</div>
+          <div>
+            <p class="eyebrow">Local control suite</p>
+            <h1>Local Website UI</h1>
+            <p class="lede">Sign in to orchestrate sites, tunnels, access, and alerts from one bold cockpit.</p>
+          </div>
+        </div>
+
+        <form id="loginForm" class="auth-form" onsubmit="event.preventDefault(); submitLogin();">
+          <label for="username">Username</label>
+          <input type="text" id="username" placeholder="workspace admin" autocomplete="username" />
+
+          <label for="password">Password</label>
+          <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+
+          <div id="twoFactorStep" class="two-factor-inline" style="display:none;">
+            <label for="twoFactorCode">Verification code</label>
+            <input type="text" id="twoFactorCode" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
+          </div>
+
+          <div class="auth-actions">
+            <button type="submit" class="btn primary" id="loginSubmitBtn">Launch console</button>
+            <button type="button" class="btn ghost" id="loginBackBtn" onclick="resetLoginStep()" style="display:none;">Back</button>
+          </div>
+
+          <button type="button" class="link-btn" onclick="toggleResetView(true)">Need a reset link?</button>
+        </form>
+
+        <form id="resetFlow" class="auth-form" style="display:none;" onsubmit="event.preventDefault();">
+          <div id="resetRequestStep">
+            <label for="resetIdentifier">Username or email</label>
+            <input type="text" id="resetIdentifier" placeholder="team@domain.lan" autocomplete="username email" />
+            <div class="auth-actions">
+              <button type="button" class="btn primary" onclick="requestPasswordReset()">Send reset email</button>
+              <button type="button" class="btn ghost" onclick="toggleResetView(false)">Back to sign in</button>
+            </div>
+          </div>
+          <div id="resetCompleteStep" style="display:none;">
+            <p class="form-hint">We sent you a reset code. Enter it below to choose a new password.</p>
+            <label for="resetCode">Reset code</label>
+            <input type="text" id="resetCode" placeholder="Paste the code from your email" autocomplete="one-time-code" />
+            <label for="resetNewPassword">New password</label>
+            <input type="password" id="resetNewPassword" placeholder="Choose a new password" autocomplete="new-password" />
+            <label for="resetConfirmPassword">Confirm password</label>
+            <input type="password" id="resetConfirmPassword" placeholder="Repeat the password" autocomplete="new-password" />
+            <div class="auth-actions">
+              <button type="button" class="btn primary" onclick="completePasswordReset()">Reset password</button>
+              <button type="button" class="btn ghost" onclick="toggleResetCompletion(false)">Back</button>
+            </div>
+          </div>
+        </form>
+
+        <p id="loginMessage" class="auth-message"></p>
+      </div>
+
+      <div class="auth-showcase">
+        <div class="showcase-card">
+          <p class="eyebrow">What you control</p>
+          <h3>Provision, expose, and secure every local property.</h3>
+          <ul class="showcase-list">
+            <li>One-click site creation with templated ingress</li>
+            <li>Live tunnel health and downtime alerts</li>
+            <li>Role-based access, 2FA, and delegated permissions</li>
+            <li>Inline file editing with safe sandboxes</li>
+          </ul>
+          <p class="showcase-foot">Runs entirely on your infra — zero SaaS dependencies.</p>
         </div>
       </div>
-      <form id="loginForm" class="auth-form" onsubmit="event.preventDefault(); submitLogin();">
-        <label for="username">Username</label>
-        <input type="text" id="username" placeholder="Enter your username" autocomplete="username" />
-
-        <label for="password">Password</label>
-        <input type="password" id="password" placeholder="Enter your password" autocomplete="current-password" />
-
-        <div id="twoFactorStep" class="two-factor-inline" style="display:none;">
-          <label for="twoFactorCode">Verification code</label>
-          <input type="text" id="twoFactorCode" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" maxlength="6" />
-        </div>
-
-        <div class="auth-actions">
-          <button type="submit" class="btn primary" id="loginSubmitBtn">Sign in</button>
-          <button type="button" class="btn ghost" id="loginBackBtn" onclick="resetLoginStep()" style="display:none;">Back</button>
-        </div>
-
-        <button type="button" class="link-btn" onclick="toggleResetView(true)">Forgot password?</button>
-      </form>
-
-      <form id="resetFlow" class="auth-form" style="display:none;" onsubmit="event.preventDefault();">
-        <div id="resetRequestStep">
-          <label for="resetIdentifier">Username or email</label>
-          <input type="text" id="resetIdentifier" placeholder="Enter your username or email" autocomplete="username email" />
-          <div class="auth-actions">
-            <button type="button" class="btn primary" onclick="requestPasswordReset()">Send reset email</button>
-            <button type="button" class="btn ghost" onclick="toggleResetView(false)">Back to sign in</button>
-          </div>
-        </div>
-        <div id="resetCompleteStep" style="display:none;">
-          <p class="form-hint">We sent you a reset code. Enter it below to choose a new password.</p>
-          <label for="resetCode">Reset code</label>
-          <input type="text" id="resetCode" placeholder="Paste the code from your email" autocomplete="one-time-code" />
-          <label for="resetNewPassword">New password</label>
-          <input type="password" id="resetNewPassword" placeholder="Choose a new password" autocomplete="new-password" />
-          <label for="resetConfirmPassword">Confirm password</label>
-          <input type="password" id="resetConfirmPassword" placeholder="Repeat the password" autocomplete="new-password" />
-          <div class="auth-actions">
-            <button type="button" class="btn primary" onclick="completePasswordReset()">Reset password</button>
-            <button type="button" class="btn ghost" onclick="toggleResetCompletion(false)">Back</button>
-          </div>
-        </div>
-      </form>
-
-      <p id="loginMessage" class="auth-message"></p>
     </div>
   </section>
 
   <div id="adminApp" class="app-shell" style="display:none;">
-    <header class="topbar">
-      <div class="topbar-left">
-        <div class="brand-mark">LW</div>
-        <div class="brand-copy">
-          <span class="brand-title">Local Website UI</span>
-          <span class="brand-subtitle">Control Center</span>
+    <div class="shell-grid">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <div class="brand-mark">LW</div>
+          <div>
+            <p class="brand-title">Local Website UI</p>
+            <p class="brand-subtitle">Operations cockpit</p>
+          </div>
         </div>
-      </div>
-      <nav class="topbar-nav">
-        <button class="nav-link" data-page="dashboard" data-page-label="Dashboard" data-page-subtitle="Overview of system health" onclick="showPage('dashboard')">Dashboard</button>
-  <button class="nav-link" data-page="createSite" data-page-label="Create Site" data-page-subtitle="Provision a new local site" data-permission="canManageSites" onclick="showPage('createSite')">Create Site</button>
-        <button class="nav-link" data-page="manageSites" data-page-label="Manage Sites" data-page-subtitle="Review and update existing sites" onclick="showPage('manageSites')">Manage Sites</button>
-        <button class="nav-link" data-page="siteFiles" data-page-label="Site Files" data-page-subtitle="Inspect and edit site files" onclick="showPage('siteFiles')">Site Files</button>
-  <button class="nav-link" data-page="tunnel" data-page-label="Cloudflare Tunnel" data-page-subtitle="Monitor and configure the tunnel" data-permission="canManageTunnel" onclick="showPage('tunnel')">Cloudflare Tunnel</button>
-  <button class="nav-link admin-only" data-page="users" data-page-label="User Management" data-page-subtitle="Create and manage accounts" data-permission="canManageUsers" onclick="showPage('users')" style="display:none;">Users</button>
-        <button class="nav-link" data-page="settings" data-page-label="Settings" data-page-subtitle="Account preferences and security" onclick="showPage('settings')">Settings</button>
-      </nav>
-      <div class="topbar-actions">
-        <button class="nav-link logout" onclick="logout()">Log out</button>
-      </div>
-    </header>
+        <nav class="nav-stack">
+          <button class="nav-link" data-page="dashboard" data-page-label="Dashboard" data-page-subtitle="Overview of system health" onclick="showPage('dashboard')">Dashboard</button>
+          <button class="nav-link" data-page="createSite" data-page-label="Create Site" data-page-subtitle="Provision a new local site" data-permission="canManageSites" onclick="showPage('createSite')">Create Site</button>
+          <button class="nav-link" data-page="manageSites" data-page-label="Manage Sites" data-page-subtitle="Review and update existing sites" onclick="showPage('manageSites')">Manage Sites</button>
+          <button class="nav-link" data-page="siteFiles" data-page-label="Site Files" data-page-subtitle="Inspect and edit site files" onclick="showPage('siteFiles')">Site Files</button>
+          <button class="nav-link" data-page="tunnel" data-page-label="Cloudflare Tunnel" data-page-subtitle="Monitor and configure the tunnel" data-permission="canManageTunnel" onclick="showPage('tunnel')">Cloudflare Tunnel</button>
+          <button class="nav-link admin-only" data-page="users" data-page-label="User Management" data-page-subtitle="Create and manage accounts" data-permission="canManageUsers" onclick="showPage('users')" style="display:none;">Users</button>
+          <button class="nav-link" data-page="settings" data-page-label="Settings" data-page-subtitle="Account preferences and security" onclick="showPage('settings')">Settings</button>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="sidebar-hint">
+            <p>Need to rotate credentials or pause a tunnel? Keep downtime notifications enabled.</p>
+          </div>
+          <button class="nav-link logout" onclick="logout()">Sign out</button>
+        </div>
+      </aside>
 
-    <div class="workspace">
-      <header class="workspace-header">
-        <div class="workspace-titles">
-          <h1 id="workspaceTitle">Dashboard</h1>
-          <p id="workspaceSubtitle">Overview of system health</p>
-        </div>
-        <div class="account-chip">
-          <div class="account-name" id="headerUserName">-</div>
-          <div class="account-role" id="headerUserRole">-</div>
-        </div>
-      </header>
+      <div class="workspace">
+        <header class="workspace-header">
+          <div class="workspace-titles">
+            <p class="eyebrow">Current page</p>
+            <h1 id="workspaceTitle">Dashboard</h1>
+            <p id="workspaceSubtitle">Overview of system health</p>
+          </div>
+          <div class="account-chip">
+            <div class="account-name" id="headerUserName">-</div>
+            <div class="account-role" id="headerUserRole">-</div>
+          </div>
+        </header>
 
-      <main class="workspace-main">
+        <main class="workspace-main">
         <section id="dashboard" class="page">
           <div class="section-header">
             <div>
@@ -517,7 +539,18 @@
           </div>
         </section>
       </main>
+      </div>
     </div>
+  </div>
+
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+  <div id="globalLoading" class="global-loading" role="status" aria-hidden="true" hidden>
+    <div class="loader">
+      <span class="loader-dot"></span>
+      <span class="loader-dot"></span>
+      <span class="loader-dot"></span>
+    </div>
+    <p id="globalLoadingLabel">Working...</p>
   </div>
 
   <script src="index.js"></script>
